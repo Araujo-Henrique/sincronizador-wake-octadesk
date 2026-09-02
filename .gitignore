@@ -1,0 +1,12 @@
+# Variáveis de ambiente (NUNCA commitar — contém a chave da API)
+.env
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# Configurações locais de IDE
+.vscode/
+
+# Lixo do Windows Explorer
+Thumbs.db
