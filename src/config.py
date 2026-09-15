@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 # Carrega o .env.development (se existir) para dentro do ambiente do processo.
 # Em produção, as variáveis normalmente já vêm definidas pelo sistema/agendador,
 # e load_dotenv() simplesmente não encontra o arquivo e não faz nada.
-load_dotenv(".env.development")
+load_dotenv()
 
 
 class ConfigError(Exception):
@@ -25,9 +25,19 @@ def _require(name: str) -> str:
     if not value:
         raise ConfigError(
             f"Variável de ambiente obrigatória '{name}' não foi definida. "
-            f"Veja o .env.example e configure o seu .env.development."
+            f"Configure o seu .env."
         )
     return value
+
+
+def _with_plus_prefix(number: str) -> str:
+    """Garante que um número de telefone tenha o prefixo "+" (formato E.164).
+
+    A API do Octadesk recusa o envio (erro "NOT_MAPPED" / "Template is not
+    applyable for this origin") se o número de origem estiver sem o "+", mesmo
+    que o número em si esteja correto — um teste manual confirmou isso.
+    """
+    return number if number.startswith("+") else f"+{number}"
 
 
 @dataclass(frozen=True)
@@ -66,13 +76,13 @@ def load_config() -> AppConfig:
         base_url=_require("WAKE_API_BASE_URL"),
         auth_header_name=_require("WAKE_AUTH_HEADER_NAME"),
         auth_header_value=_require("WAKE_API_TOKEN"),
-        customers_endpoint=os.getenv("WAKE_CUSTOMERS_ENDPOINT", "/clientes"),
+        customers_endpoint=os.getenv("WAKE_CUSTOMERS_ENDPOINT", "/usuarios"),
     )
     octadesk = OctadeskConfig(
         base_url=_require("OCTADESK_API_BASE_URL"),
         api_key=_require("OCTADESK_API_KEY"),
         agent_email=_require("OCTADESK_AGENT_EMAIL"),
-        waba_number=_require("OCTADESK_WABA_NUMBER"),
+        waba_number=_with_plus_prefix(_require("OCTADESK_WABA_NUMBER")),
         template_id=_require("OCTADESK_TEMPLATE_ID"),
     )
     return AppConfig(
