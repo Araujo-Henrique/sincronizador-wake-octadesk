@@ -1,23 +1,21 @@
 """Cliente para a API da Wake — busca os clientes cadastrados em uma data específica.
 
-ATENÇÃO — pontos ainda marcados com TODO precisam ser confirmados com a
-documentação oficial da Wake (https://wakecommerce.readme.io/ e o token gerado
-em Extensões e Integrações > Tokens, dentro do painel admin da Wake):
-  - o path exato do endpoint de listagem de clientes;
-  - o nome real do parâmetro de limite inferior ("cadastrados a partir de").
-    Um teste manual contra a API real confirmou que "dataCadastroInicial" e
-    "dataInicial" são ignorados (não filtram nada), então não há hoje um jeito
-    direto de pedir a Wake "só os clientes cadastrados no dia X". Por isso
-    get_customers_registered_on usa um workaround: chama a API duas vezes
-    usando só "dataFinal" (esse parâmetro foi confirmado como funcional —
-    filtra clientes cadastrados até a data informada) e calcula a diferença
-    entre os dois conjuntos pelo "usuarioId".
-
-Os nomes dos campos na resposta (nome, telefoneCelular, telefoneComercial,
-email) já foram confirmados batendo na API real e estão corretos.
+Contrato confirmado testando contra a API real (GET /usuarios):
+  - "dataInicial" é um filtro INCLUSIVO ("cadastrados a partir desta data,
+    incluindo ela") e "dataFinal" é EXCLUSIVO ("cadastrados antes do início
+    desta data"). Para pegar só um dia, o intervalo usado é portanto
+    [target_date, target_date + 1 dia).
+  - A resposta é paginada: no máximo 50 registros por chamada, controlados
+    pelo parâmetro "pagina" (1-based). O header de resposta "X-Total-Count"
+    informa quantos registros no total batem com o filtro aplicado — sem
+    paginar até esse total, um dia com muitos cadastros (ou uma consulta sem
+    filtro apertado) fica truncado silenciosamente nos primeiros 50.
+  - Os nomes dos campos no corpo da resposta (nome, telefoneCelular,
+    telefoneComercial, email) vêm em camelCase.
 
 O restante do projeto (Octadesk, log de idempotência, orquestração) não depende
-desses detalhes — só esta classe precisa ser ajustada depois.
+desses detalhes — só esta classe precisa ser ajustada se a Wake mudar o
+contrato da API.
 """
 from __future__ import annotations
 
@@ -88,28 +86,15 @@ class WakeClient:
     def get_customers_registered_on(self, target_date: date) -> list[WakeCustomer]:
         """Busca todos os clientes cadastrados em `target_date`.
 
-        Workaround: a Wake não expõe um filtro funcional de "cadastrados a
-        partir de" (ver TODO no topo do arquivo). Para isolar só quem se
-        cadastrou em `target_date`, buscamos "cadastrados até o dia seguinte"
-        e "cadastrados até `target_date`" (o único filtro confirmado como
-        funcional é "dataFinal") e calculamos a diferença entre os dois
-        conjuntos pelo "usuarioId".
-
-        IMPORTANTE: "dataFinal=X" foi confirmado, testando contra a API real,
-        como um corte EXCLUSIVO — equivale a "cadastrados antes do início do
-        dia X", não "até o fim do dia X". Por isso o corte de cima usa
-        `target_date + 1 dia`, não `target_date`.
-
-        TODO: confirmar com a documentação da Wake se a resposta é paginada.
-        Se for, este método precisa percorrer todas as páginas antes de retornar.
+        Usa "dataInicial"=target_date (inclusive) e "dataFinal"=target_date + 1
+        dia (exclusive) — ver contrato da API no topo do arquivo — e percorre
+        todas as páginas necessárias para cobrir o total de registros do dia.
         """
-        until_day_after_target = self._fetch_raw_customers_until(target_date + timedelta(days=1))
-        until_target = self._fetch_raw_customers_until(target_date)
-
-        already_existing_ids = {raw.get("usuarioId") for raw in until_target}
-        raw_customers = [
-            raw for raw in until_day_after_target if raw.get("usuarioId") not in already_existing_ids
-        ]
+        params = {
+            "dataInicial": target_date.isoformat(),
+            "dataFinal": (target_date + timedelta(days=1)).isoformat(),
+        }
+        raw_customers = self._fetch_all_pages(params)
 
         customers: list[WakeCustomer] = []
         for raw in raw_customers:
@@ -119,16 +104,28 @@ class WakeClient:
                 logger.warning("Ignorando cliente inválido vindo da Wake: %s", exc)
         return customers
 
-    def _fetch_raw_customers_until(self, cutoff_date: date) -> list[dict[str, Any]]:
-        """Busca os clientes cadastrados antes do início de `cutoff_date` (exclusive)."""
+    def _fetch_all_pages(self, params: dict[str, str]) -> list[dict[str, Any]]:
+        """Executa `params` contra o endpoint de clientes, percorrendo todas as
+        páginas indicadas pelo header "X-Total-Count" da primeira resposta.
+        """
         url = self._config.base_url.rstrip("/") + self._config.customers_endpoint
-        params = {"dataFinal": cutoff_date.isoformat()}
         headers = {self._config.auth_header_name: self._config.auth_header_value}
 
-        response = self._session.get(url, params=params, headers=headers, timeout=self._timeout)
-        response.raise_for_status()
-        payload = response.json()
+        all_raw: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            response = self._session.get(
+                url, params={**params, "pagina": page}, headers=headers, timeout=self._timeout
+            )
+            response.raise_for_status()
+            payload = response.json()
+            raw_page = payload.get("data", payload) if isinstance(payload, dict) else payload
+            if not raw_page:
+                break
+            all_raw.extend(raw_page)
 
-        # TODO: confirmar se a resposta vem como uma lista "crua" ou dentro de
-        # uma chave como "data"/"Data"/"clientes" — hoje aceitamos os dois casos.
-        return payload.get("data", payload) if isinstance(payload, dict) else payload
+            total_count = response.headers.get("X-Total-Count")
+            if total_count is None or len(all_raw) >= int(total_count):
+                break
+            page += 1
+        return all_raw
