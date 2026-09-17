@@ -10,3 +10,6 @@ __pycache__/
 
 # Lixo do Windows Explorer
 Thumbs.db
+
+# Registro de clientes contatados
+logs/sent_log.jsonl
