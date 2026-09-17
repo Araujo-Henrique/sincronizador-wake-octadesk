@@ -1,4 +1,4 @@
-# Variáveis de ambiente (NUNCA commitar — contém a chave da API)
+# Variáveis de ambiente
 .env
 
 # Cache do Python
