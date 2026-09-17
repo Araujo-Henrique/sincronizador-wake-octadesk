@@ -96,7 +96,11 @@ class OctadeskClient:
                     "variables": [{"key": v.key, "value": v.value} for v in (variables or [])],
                 }
             },
-            "options": {"automaticAssign": True},
+            # automaticAssign=True atribui a conversa direto a um agente humano,
+            # pulando o bot/fluxo configurado no canal — confirmado testando
+            # manualmente (respondendo ao template) que automaticAssign=False é
+            # o que deixa o bot engatar antes de cair num humano.
+            "options": {"automaticAssign": False},
         }
 
         response = self._session.post(url, json=body, headers=headers, timeout=self._timeout)

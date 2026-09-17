@@ -32,6 +32,7 @@ def test_send_template_message_success(octadesk_config):
     assert body["target"]["contact"]["name"] == "Maria"
     assert body["origin"]["contact"]["code"] == "+5511900000000"
     assert body["content"]["templateMessage"]["id"] == "template-123"
+    assert body["options"]["automaticAssign"] is False
 
 
 def test_send_template_message_includes_email_only_when_provided(octadesk_config):
